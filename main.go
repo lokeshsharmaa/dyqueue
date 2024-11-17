@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync"
 	"time"
 )
 
@@ -11,20 +12,24 @@ type Data struct {
 }
 
 func main() {
+	var wg sync.WaitGroup
 
 	messages := make(chan Data)
 	result := make(chan int)
 	exitChannel := make(chan int)
-	hour := time.Minute * 60
+	hour := time.Second * 5
+	log.Println("Starting")
 
+	wg.Add(1)
 	go printMessages(result)
 	go printChannelLength(messages, result)
-
 	go exitAfter(hour, exitChannel)
+
 	generateMessages(messages)
+	go handleMessages(messages, result, exitChannel, &wg)
 
-	handleMessages(messages, result, exitChannel)
-
+	wg.Wait()
+	log.Println("Program exited")
 }
 
 func exitAfter(duration time.Duration, exitChannel chan int) {
@@ -46,18 +51,20 @@ func printMessages(result chan int) {
 	}
 }
 
-func handleMessages(messages chan Data, result chan int, exitChannel chan int) {
-	go func() {
-		for {
-			select {
-			case data := <-messages:
-				result <- data.first + data.second
-			case <-exitChannel:
-				log.Println("Exiting")
-				return
-			}
+func handleMessages(messages chan Data, result chan int, exitChannel chan int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case msg := <-messages:
+			// Handle the message
+			result <- msg.first + msg.second
+		case <-exitChannel:
+			log.Print("Exiting")
+			close(messages)
+			close(result)
+			return
 		}
-	}()
+	}
 }
 
 func generateMessages(messages chan Data) {
