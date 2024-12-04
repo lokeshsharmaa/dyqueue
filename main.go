@@ -1,8 +1,8 @@
 package main
 
 import (
+	"dyqueue/client/dyqueue"
 	"log"
-	"sync"
 	"time"
 )
 
@@ -11,30 +11,51 @@ type Data struct {
 	second int
 }
 
-func main() {
-	var wg sync.WaitGroup
-
-	messages := make(chan Data)
-	result := make(chan int)
-	exitChannel := make(chan int)
-	hour := time.Second * 5
-	log.Println("Starting")
-
-	wg.Add(1)
-	go printMessages(result)
-	go printChannelLength(messages, result)
-	go exitAfter(hour, exitChannel)
-
-	generateMessages(messages)
-	go handleMessages(messages, result, exitChannel, &wg)
-
-	wg.Wait()
-	log.Println("Program exited")
+type ConcreteDyqueue struct {
+	*dyqueue.AbstractDyqueue[Data]
+	ResultChannel chan int
 }
 
-func exitAfter(duration time.Duration, exitChannel chan int) {
+func (c *ConcreteDyqueue) Consume(message Data) {
+	c.ResultChannel <- message.first + message.second
+}
+
+func (c *ConcreteDyqueue) Produce() {
+	for i := 0; i < 1000; i++ {
+		for i := 0; i < 10; i++ {
+			log.Println("Producing Message: ", i)
+			c.AbstractDyqueue.MessageChannel <- Data{first: i, second: i}
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func main() {
+
+	messages := make(chan Data, 100)
+	result := make(chan int, 100)
+	dyqueue := ConcreteDyqueue{
+		AbstractDyqueue: dyqueue.NewAbstractDyqueue[Data](1, messages),
+		ResultChannel:   result,
+	}
+	dyqueue.SetConcrete(&dyqueue) // Need to fix this line
+
+	hour := time.Second * 10
+
+	go printMessages(result)
+	go printChannelLength(messages, result)
+	go dyqueue.exitAfter(hour)
+
+	dyqueue.Start()
+
+	log.Println("Program Exiting")
+}
+
+func (c *ConcreteDyqueue) exitAfter(duration time.Duration) {
 	time.Sleep(duration)
-	exitChannel <- 1
+	c.Stop()
+	close(c.ResultChannel)
+	close(c.MessageChannel)
 }
 
 func printChannelLength(messages chan Data, result chan int) {
@@ -47,31 +68,6 @@ func printChannelLength(messages chan Data, result chan int) {
 
 func printMessages(result chan int) {
 	for value := range result {
-		log.Println(value)
+		log.Println("Result: ", value)
 	}
-}
-
-func handleMessages(messages chan Data, result chan int, exitChannel chan int, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for {
-		select {
-		case msg := <-messages:
-			// Handle the message
-			result <- msg.first + msg.second
-		case <-exitChannel:
-			log.Print("Exiting")
-			close(messages)
-			close(result)
-			return
-		}
-	}
-}
-
-func generateMessages(messages chan Data) {
-	go func() {
-		for i := 0; i < 100; i++ {
-			messages <- Data{first: i, second: i}
-			time.Sleep(1 * time.Second)
-		}
-	}()
 }
